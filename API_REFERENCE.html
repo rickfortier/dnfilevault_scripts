@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNFileVault API Reference</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet">
+</head>
+
+<body>
+    <div id="redoc-container"></div>
+    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"> </script>
+    <script>
+        const spec = {
+            "openapi": "3.0.0",
+            "info": {
+                "title": "DNFileVault Customer API",
+                "description": "Professional API documentation for DNFileVault customers.\nFocuses on non-administrative endpoints for listing and downloading files.\n\n**Security Note:** All protected endpoints require a JWT token obtained via `/auth/login`.",
+                "version": "1.0.0",
+                "contact": {
+                    "name": "DeltaNeutral Support",
+                    "email": "support@deltaneutral.com"
+                }
+            },
+            "servers": [
+                {
+                    "url": "https://api.dnfilevault.com",
+                    "description": "Production API Server"
+                }
+            ],
+            "components": {
+                "securitySchemes": {
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "JWT"
+                    }
+                },
+                "schemas": {
+                    "LoginRequest": {
+                        "type": "object",
+                        "required": ["email", "password"],
+                        "properties": {
+                            "email": { "type": "string", "format": "email", "example": "you@example.com" },
+                            "password": { "type": "string", "format": "password", "example": "your_password" }
+                        }
+                    },
+                    "User": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "email": { "type": "string" },
+                            "name": { "type": "string" },
+                            "company": { "type": "string" }
+                        }
+                    },
+                    "Purchase": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "product_name": { "type": "string" },
+                            "description": { "type": "string" },
+                            "purchase_date": { "type": "string", "format": "date-time" },
+                            "expiration_date": { "type": "string", "format": "date-time" },
+                            "is_subscription": { "type": "integer", "enum": [0, 1] }
+                        }
+                    },
+                    "Group": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "name": { "type": "string" },
+                            "description": { "type": "string" },
+                            "file_count": { "type": "integer" },
+                            "newest_file_display_name": { "type": "string" },
+                            "newest_file_created_at": { "type": "string", "format": "date-time" },
+                            "expires_at": { "type": "string", "format": "date-time" },
+                            "notify_on_new_files": { "type": "integer", "enum": [0, 1] }
+                        }
+                    },
+                    "File": {
+                        "type": "object",
+                        "properties": {
+                            "uuid_filename": { "type": "string", "description": "Use this identifier for downloading." },
+                            "display_name": { "type": "string", "description": "Human-friendly filename." },
+                            "file_size": { "type": "integer", "description": "Size in bytes." },
+                            "created_at": { "type": "string", "format": "date-time" }
+                        }
+                    }
+                }
+            },
+            "paths": {
+                "/health": {
+                    "get": {
+                        "summary": "Health Check",
+                        "description": "Returns the status of the API services. No authentication required.",
+                        "responses": {
+                            "200": {
+                                "description": "Service is healthy.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "status": { "type": "string" },
+                                                "service": { "type": "string" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/auth/login": {
+                    "post": {
+                        "summary": "Authenticate",
+                        "description": "Exchanges credentials for a JWT access token.",
+                        "requestBody": {
+                            "required": true,
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/LoginRequest" }
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Authentication successful.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "token": { "type": "string" },
+                                                "user": { "$ref": "#/components/schemas/User" }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            "401": { "description": "Invalid credentials." }
+                        }
+                    }
+                },
+                "/purchases": {
+                    "get": {
+                        "summary": "List Purchases",
+                        "security": [{ "bearerAuth": [] }],
+                        "responses": {
+                            "200": {
+                                "description": "List of user purchases.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "purchases": { "type": "array", "items": { "$ref": "#/components/schemas/Purchase" } },
+                                                "count": { "type": "integer" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/purchases/{purchase_id}/files": {
+                    "get": {
+                        "summary": "List Purchase Files",
+                        "security": [{ "bearerAuth": [] }],
+                        "parameters": [
+                            { "name": "purchase_id", "in": "path", "required": true, "schema": { "type": "integer" } }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "List of files in the purchase.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "purchase": { "$ref": "#/components/schemas/Purchase" },
+                                                "files": { "type": "array", "items": { "$ref": "#/components/schemas/File" } },
+                                                "count": { "type": "integer" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/groups": {
+                    "get": {
+                        "summary": "List Groups",
+                        "security": [{ "bearerAuth": [] }],
+                        "responses": {
+                            "200": {
+                                "description": "List of groups the user belongs to.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "groups": { "type": "array", "items": { "$ref": "#/components/schemas/Group" } },
+                                                "count": { "type": "integer" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/groups/{group_id}/files": {
+                    "get": {
+                        "summary": "List Group Files",
+                        "security": [{ "bearerAuth": [] }],
+                        "parameters": [
+                            { "name": "group_id", "in": "path", "required": true, "schema": { "type": "integer" } }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "List of files in the group.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "group": { "$ref": "#/components/schemas/Group" },
+                                                "files": { "type": "array", "items": { "$ref": "#/components/schemas/File" } },
+                                                "count": { "type": "integer" }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            "403": { "description": "Not a member." },
+                            "410": { "description": "Membership expired." }
+                        }
+                    }
+                },
+                "/download/{uuid_filename}": {
+                    "get": {
+                        "summary": "Download File",
+                        "description": "Returns the file bytes. Use streaming for large downloads.",
+                        "security": [{ "bearerAuth": [] }],
+                        "parameters": [
+                            { "name": "uuid_filename", "in": "path", "required": true, "schema": { "type": "string" } }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "File bytes (ZIP/CSV/etc).",
+                                "content": {
+                                    "application/octet-stream": {
+                                        "schema": { "type": "string", "format": "binary" }
+                                    }
+                                }
+                            },
+                            "403": { "description": "Access denied." },
+                            "404": { "description": "File not found." }
+                        }
+                    }
+                }
+            }
+        };
+
+        Redoc.init(spec, {
+            theme: {
+                colors: {
+                    primary: {
+                        main: '#0056b3'
+                    }
+                }
+            }
+        }, document.getElementById('redoc-container'));
+    </script>
+</body>
+
+</html>

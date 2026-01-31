@@ -1,0 +1,31 @@
+# Credentials & Environment
+.env
+*.env
+auth.json
+credentials.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary/Partial Downloads
+*.part
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project-specific exclusions (if you want to keep original specific scripts out of Git)
+# *axiom*
+# *PETER*
+# *fortier*
