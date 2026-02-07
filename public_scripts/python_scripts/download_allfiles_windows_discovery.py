@@ -5,7 +5,8 @@ This script downloads ALL files from your DNFileVault account:
 1. All Purchases
 2. All Groups
 
-It is designed for Windows users and includes explanations for each part.
+It automatically discovers available API servers and fails over
+to the next one if the primary is down.
 
 BEFORE YOU RUN THIS:
 1. You need Python installed.
@@ -65,10 +66,73 @@ DAYS_TO_CHECK = None
 # ==============================================================================
 
 
-# Constants for the API
-BASE_URL = "https://api.dnfilevault.com"
+# API Discovery - The script fetches the current list of API servers automatically.
+# You should never need to change these URLs.
+DISCOVERY_URL = "https://config.dnfilevault.com/endpoints.json"
+
+# Hardcoded fallback in case the discovery URL itself is unreachable.
+FALLBACK_ENDPOINTS = [
+    "https://api.dnfilevault.com",
+    "https://api-redmint.dnfilevault.com",
+]
+
 # A custom User-Agent identifies your script and prevents the API from throttling you.
 USER_AGENT = "DNFileVaultClient/1.0 (+support@deltaneutral.com)"
+
+
+def get_api_endpoints(session):
+    """
+    Fetches the current list of API endpoints from the discovery service (Cloudflare R2).
+    Falls back to a hardcoded list if the discovery service is unreachable.
+    Returns a list of URL strings sorted by priority.
+    """
+    print("Discovering API endpoints...")
+    try:
+        r = session.get(DISCOVERY_URL, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            endpoints = sorted(data.get("endpoints", []), key=lambda x: x.get("priority", 99))
+            urls = [e["url"] for e in endpoints]
+            print(f"  Found {len(urls)} endpoints (config v{data.get('version', '?')}, updated {data.get('updated', '?')})")
+            for e in endpoints:
+                print(f"    {e.get('priority', '?')}. {e['url']} ({e.get('label', '')})")
+            return urls
+        else:
+            print(f"  Discovery returned status {r.status_code}, using fallback list.")
+    except Exception as e:
+        print(f"  Discovery unavailable ({e}), using fallback list.")
+    
+    print(f"  Using {len(FALLBACK_ENDPOINTS)} fallback endpoints.")
+    return FALLBACK_ENDPOINTS
+
+
+def find_working_api(session, endpoints):
+    """
+    Tests each API endpoint's /health URL and returns the first one that responds
+    with status: healthy. Returns None if all endpoints are down.
+    """
+    print("\nFinding a healthy API server...")
+    for url in endpoints:
+        try:
+            r = session.get(f"{url}/health", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("status") == "healthy":
+                    print(f"  ✓ {url} - healthy")
+                    return url
+                else:
+                    print(f"  ✗ {url} - responded but status: {data.get('status', 'unknown')}")
+            else:
+                print(f"  ✗ {url} - returned {r.status_code}")
+        except requests.exceptions.Timeout:
+            print(f"  ✗ {url} - timed out")
+        except requests.exceptions.ConnectionError:
+            print(f"  ✗ {url} - connection failed")
+        except Exception as e:
+            print(f"  ✗ {url} - error: {e}")
+    
+    return None
+
 
 def sanitize_filename(name):
     """
@@ -81,6 +145,7 @@ def sanitize_filename(name):
     clean = re.sub(r'[<>:"/\\\\|?*]', "_", str(name))
     return clean.strip() or "unnamed_file"
 
+
 def ensure_folder_exists(folder_path):
     """
     Checks if a folder exists. If not, it creates it.
@@ -92,14 +157,15 @@ def ensure_folder_exists(folder_path):
         except OSError as e:
             print(f"Error creating folder {folder_path}: {e}")
 
-def login_to_api(session):
+
+def login_to_api(session, base_url):
     """
     Logs in using the EMAIL and PASSWORD variables.
     Returns the 'token' needed for downloading files.
     """
-    print(f"Step 1: Logging in as {EMAIL}...")
+    print(f"\nStep 2: Logging in as {EMAIL}...")
     
-    login_url = f"{BASE_URL}/auth/login"
+    login_url = f"{base_url}/auth/login"
     payload = {
         "email": EMAIL,
         "password": PASSWORD
@@ -122,7 +188,7 @@ def login_to_api(session):
             print(response.text)
             
     except requests.exceptions.ConnectionError:
-        print("Login failed: ERROR - No internet connection or DNS failure. (Could not reach api.dnfilevault.com)")
+        print(f"Login failed: ERROR - Could not reach {base_url}")
     except requests.exceptions.Timeout:
         print("Login failed: ERROR - The request timed out. Your connection might be slow or the server is busy.")
     except requests.exceptions.RequestException as e:
@@ -130,7 +196,8 @@ def login_to_api(session):
         
     return None
 
-def download_file(session, token, file_info, save_directory):
+
+def download_file(session, token, file_info, save_directory, base_url):
     """
     Downloads a single file using the 'Auto-Fallback' strategy:
     1. Method 1 (Primary): Direct Cloudflare R2 (Fastest, no auth)
@@ -146,16 +213,12 @@ def download_file(session, token, file_info, save_directory):
     
     # Check if we already have it
     if os.path.exists(full_save_path):
-        # Optional: verify size here if you want to be extra robust
-        # print(f"  Skipping (already exists): {safe_name}")
         return
 
     # Method 1: Try R2 Direct Link (PRIMARY)
     if cloud_url:
         print(f"  Downloading: {safe_name} via Cloudflare R2 (Method 1)...")
         try:
-            # Note: We use a fresh requests.get (no session headers) because 
-            # R2 links are public/signed and don't need our JWT or custom User-Agent.
             with requests.get(cloud_url, stream=True, timeout=30) as r:
                 if r.status_code == 200:
                     save_content(r, full_save_path)
@@ -172,10 +235,9 @@ def download_file(session, token, file_info, save_directory):
         return
 
     print(f"  Downloading: {safe_name} via API Server (Method 2)...")
-    download_url = f"{BASE_URL}/download/{uuid_filename}"
+    download_url = f"{base_url}/download/{uuid_filename}"
     
     try:
-        # We reuse the 'session' here because it carries our JWT Token and custom User-Agent.
         with session.get(download_url, stream=True, timeout=300) as r:
             if r.status_code == 200:
                 save_content(r, full_save_path)
@@ -185,17 +247,17 @@ def download_file(session, token, file_info, save_directory):
     except Exception as e:
         print(f"  ✗ Error downloading {safe_name}: {e}")
 
+
 def save_content(response, full_save_path):
     """Utility to write the response stream to disk safely with speed display."""
     temp_path = full_save_path + ".tmp"
     total_downloaded = 0
     start_time = time.time()
     
-    # Try to get total size for progress
     total_size = int(response.headers.get('content-length', 0))
     
     with open(temp_path, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=1024*1024): # 1 MB chunks
+        for chunk in response.iter_content(chunk_size=1024*1024):
             if chunk:
                 f.write(chunk)
                 total_downloaded += len(chunk)
@@ -206,31 +268,46 @@ def save_content(response, full_save_path):
                     
                     if total_size > 0:
                         percent = (total_downloaded / total_size) * 100
-                        # Use end='' and \r to stay on the same line for progress updates
                         sys.stdout.write(f"\r    Progress: {percent:6.1f}% | Speed: {speed_mbps:6.2f} MB/s")
                     else:
                         sys.stdout.write(f"\r    Downloaded: {total_downloaded / (1024*1024):7.1f} MB | Speed: {speed_mbps:6.2f} MB/s")
                     sys.stdout.flush()
     
-    # End the progress line
     print("")
     
     if os.path.exists(full_save_path):
         os.remove(full_save_path)
     os.rename(temp_path, full_save_path)
 
+
 def main():
-    print("--- DNFileVault Windows Downloader ---")
-    print(f"Saving files to: {OUTPUT_FOLDER}")
+    print("=" * 60)
+    print("  DNFileVault Downloader v2.0")
+    print("  Auto-Discovery + Failover")
+    print("=" * 60)
+    print(f"Saving files to: {OUTPUT_FOLDER}\n")
     
     # 1. Start a web session
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
     
-    # 2. Login
-    token = login_to_api(session)
+    # 2. Discover API endpoints from config.dnfilevault.com
+    endpoints = get_api_endpoints(session)
+    
+    # 3. Find the first healthy API server
+    base_url = find_working_api(session, endpoints)
+    if not base_url:
+        print("\n✗ ERROR: All API servers are unreachable!")
+        print("  Please check your internet connection and try again.")
+        print("  If the problem persists, contact support@deltaneutral.com")
+        input("\nPress Enter to exit...")
+        return
+    
+    print(f"\nUsing API: {base_url}")
+    
+    # 4. Login
+    token = login_to_api(session, base_url)
     if not token:
-        # If no token, we can't continue
         print("Stopping script due to login failure.")
         input("Press Enter to exit...")
         return
@@ -241,11 +318,11 @@ def main():
     # Prepare the output folder
     ensure_folder_exists(OUTPUT_FOLDER)
 
-    # 3. Download Purchases
+    # 5. Download Purchases
     # --------------------------------------------------------------------------
     print("\n--- Checking Purchases ---")
     try:
-        resp = session.get(f"{BASE_URL}/purchases", timeout=60)
+        resp = session.get(f"{base_url}/purchases", timeout=60)
         data = resp.json()
         purchases = data.get("purchases", [])
     except Exception as e:
@@ -256,35 +333,30 @@ def main():
         print("No purchases found.")
 
     for p in purchases:
-        # Create a folder for each product
         folder_name = f"{p['id']} - {p.get('product_name', 'Unknown')}"
         safe_folder_name = sanitize_filename(folder_name)
         product_path = os.path.join(OUTPUT_FOLDER, "Purchases", safe_folder_name)
         ensure_folder_exists(product_path)
         
-        # Get files for this purchase
         try:
-            files_resp = session.get(f"{BASE_URL}/purchases/{p['id']}/files", timeout=60)
+            files_resp = session.get(f"{base_url}/purchases/{p['id']}/files", timeout=60)
             files = files_resp.json().get("files", [])
             
-            # Determine which files to download
             files_to_download = files
             if DAYS_TO_CHECK is not None:
-                # If we have a limit, take only the first N files
-                # (Assumes the API returns them sorted newly created -> older)
                 files_to_download = files[:DAYS_TO_CHECK]
 
             for f in files_to_download:
-                download_file(session, token, f, product_path)
+                download_file(session, token, f, product_path, base_url)
                 
         except Exception as e:
             print(f"Error getting files for purchase {p['id']}: {e}")
 
-    # 4. Download Groups
+    # 6. Download Groups
     # --------------------------------------------------------------------------
     print("\n--- Checking Groups ---")
     try:
-        resp = session.get(f"{BASE_URL}/groups", timeout=60)
+        resp = session.get(f"{base_url}/groups", timeout=60)
         data = resp.json()
         groups = data.get("groups", [])
     except Exception as e:
@@ -295,34 +367,30 @@ def main():
         print("No groups found.")
 
     for g in groups:
-        # Create a folder for each group
         folder_name = f"{g['id']} - {g.get('name', 'Unknown')}"
         safe_folder_name = sanitize_filename(folder_name)
         group_path = os.path.join(OUTPUT_FOLDER, "Groups", safe_folder_name)
         ensure_folder_exists(group_path)
         
-        # Get files for this group
         try:
-            files_resp = session.get(f"{BASE_URL}/groups/{g['id']}/files", timeout=60)
+            files_resp = session.get(f"{base_url}/groups/{g['id']}/files", timeout=60)
             files = files_resp.json().get("files", [])
             
-            # Determine which files to download
             files_to_download = files
             if DAYS_TO_CHECK is not None:
-                # If we have a limit, take only the first N files
                 files_to_download = files[:DAYS_TO_CHECK]
 
             for f in files_to_download:
-                download_file(session, token, f, group_path)
+                download_file(session, token, f, group_path, base_url)
                 
         except Exception as e:
             print(f"Error getting files for group {g['id']}: {e}")
 
-    print("\n------------------------------------------------------------------")
+    print("\n" + "=" * 60)
     print("All done!")
     print(f"Check your files in: {OUTPUT_FOLDER}")
-    # Pause so the user can see the message if they double-clicked the script
     input("Press Enter to close this window...")
+
 
 if __name__ == "__main__":
     main()
