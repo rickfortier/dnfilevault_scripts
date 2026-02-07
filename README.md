@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # DNFileVault Scripts
 
 A collection of client-side scripts to interact with the [DNFileVault API](https://api.dnfilevault.com). These scripts are designed to help users download their purchases and group files efficiently.
@@ -57,3 +58,6 @@ A collection of client-side scripts to interact with the [DNFileVault API](https
 
 ## License
 MIT License - feel free to use and modify for your own needs.
+=======
+
+>>>>>>> e317b6690bfb4aa9c48cc0f66dafe79071e38164
