@@ -22,8 +22,8 @@
             "openapi": "3.0.0",
             "info": {
                 "title": "DNFileVault Customer API",
-                "description": "Professional API documentation for DNFileVault customers.\nFocuses on non-administrative endpoints for listing and downloading files.\n\n**Security Note:** All protected endpoints require a JWT token obtained via `/auth/login`.",
-                "version": "1.0.0",
+                "description": "Professional API documentation for DNFileVault customers.\nFocuses on non-administrative endpoints for listing and downloading files.\n\n**Security Note:** All protected endpoints require a JWT token obtained via `/auth/login`.\n\n## API Discovery & Failover\n\nDNFileVault runs across multiple API servers for redundancy. Rather than hardcoding a single server URL, your scripts should fetch the current server list from the discovery endpoint:\n\n```\nGET https://config.dnfilevault.com/endpoints.json\n```\n\nThis returns a JSON object listing all available API servers sorted by priority. Your script should test each server's `/health` endpoint and use the first healthy one. If a server goes down, the next is tried automatically.\n\nSee the [Developer Guide](markdowns/DNFileVault_Developer_Guide.md) for full implementation details.\n\n## Download Methods\n\nDNFileVault provides **two download methods**:\n\n1. **Direct Cloudflare R2 (Primary):** Use the `cloud_share_link` field from file listings. This downloads directly from Cloudflare's global CDN — fastest, no authentication header needed.\n\n2. **API Server Route (Fallback):** Use `GET /download/{uuid_filename}` with a Bearer token. Slower, but works behind corporate firewalls that block `vault.dnfilevault.com`.\n\nAlways try `cloud_share_link` first and fall back to the API server route.",
+                "version": "2.0.0",
                 "contact": {
                     "name": "DeltaNeutral Support",
                     "email": "support@deltaneutral.com"
@@ -32,7 +32,19 @@
             "servers": [
                 {
                     "url": "https://api.dnfilevault.com",
-                    "description": "Production API Server"
+                    "description": "Yellow-Dev (Primary)"
+                },
+                {
+                    "url": "https://api-redmint.dnfilevault.com",
+                    "description": "Red-Mint"
+                },
+                {
+                    "url": "https://api-va.dnfilevault.com",
+                    "description": "Hetzner-VA (Ashburn)"
+                },
+                {
+                    "url": "https://api-west.dnfilevault.com",
+                    "description": "Hetzner-West (Oregon)"
                 }
             ],
             "components": {
@@ -88,10 +100,47 @@
                     "File": {
                         "type": "object",
                         "properties": {
-                            "uuid_filename": { "type": "string", "description": "Use this identifier for downloading." },
-                            "display_name": { "type": "string", "description": "Human-friendly filename." },
+                            "uuid_filename": { "type": "string", "description": "Unique file identifier. Used for the `/download/{uuid_filename}` fallback endpoint." },
+                            "display_name": { "type": "string", "description": "Human-friendly filename (e.g., `L2_20260116.zip`)." },
                             "file_size": { "type": "integer", "description": "Size in bytes." },
-                            "created_at": { "type": "string", "format": "date-time" }
+                            "checksum": { "type": "string", "description": "File checksum for integrity verification." },
+                            "created_at": { "type": "string", "format": "date-time" },
+                            "cloud_share_link": { "type": "string", "format": "uri", "description": "**PRIMARY download method.** Direct Cloudflare R2 CDN link. No authentication needed. Use this for all downloads — it is the fastest method. Example: `https://vault.dnfilevault.com/{uuid_filename}`" }
+                        }
+                    },
+                    "HealthResponse": {
+                        "type": "object",
+                        "properties": {
+                            "service": { "type": "string", "example": "DNFileVault API" },
+                            "status": { "type": "string", "example": "healthy" }
+                        }
+                    },
+                    "HealthDbResponse": {
+                        "type": "object",
+                        "properties": {
+                            "service": { "type": "string", "example": "DNFileVault API" },
+                            "status": { "type": "string", "example": "healthy" },
+                            "database": { "type": "string", "example": "connected" },
+                            "files": { "type": "integer", "example": 5731, "description": "Total number of files in the system." },
+                            "users": { "type": "integer", "example": 329, "description": "Total number of registered users." }
+                        }
+                    },
+                    "DiscoveryResponse": {
+                        "type": "object",
+                        "properties": {
+                            "version": { "type": "integer", "example": 1, "description": "Config version. Incremented when endpoints change." },
+                            "updated": { "type": "string", "example": "2026-02-07", "description": "Date of last configuration change." },
+                            "endpoints": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "url": { "type": "string", "example": "https://api.dnfilevault.com" },
+                                        "label": { "type": "string", "example": "Yellow-Dev" },
+                                        "priority": { "type": "integer", "example": 1, "description": "Lower number = higher priority." }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -99,20 +148,32 @@
             "paths": {
                 "/health": {
                     "get": {
+                        "tags": ["Health & Discovery"],
                         "summary": "Health Check",
-                        "description": "Returns the status of the API services. No authentication required.",
+                        "description": "Returns the status of the API server. No authentication required. Use this endpoint to determine which server to connect to during the discovery/failover process.",
                         "responses": {
                             "200": {
                                 "description": "Service is healthy.",
                                 "content": {
                                     "application/json": {
-                                        "schema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "status": { "type": "string" },
-                                                "service": { "type": "string" }
-                                            }
-                                        }
+                                        "schema": { "$ref": "#/components/schemas/HealthResponse" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/health/db": {
+                    "get": {
+                        "tags": ["Health & Discovery"],
+                        "summary": "Health Check (with Database)",
+                        "description": "Returns the status of the API server **and** verifies database connectivity. Use this for deeper monitoring (e.g., UptimeRobot). Slower than `/health` due to the database round-trip.",
+                        "responses": {
+                            "200": {
+                                "description": "Service and database are healthy.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": { "$ref": "#/components/schemas/HealthDbResponse" }
                                     }
                                 }
                             }
@@ -121,8 +182,9 @@
                 },
                 "/auth/login": {
                     "post": {
+                        "tags": ["Authentication"],
                         "summary": "Authenticate",
-                        "description": "Exchanges credentials for a JWT access token.",
+                        "description": "Exchanges credentials for a JWT access token. Include this token in the `Authorization: Bearer <token>` header for all protected endpoints.\n\n**Important:** Always set a custom `User-Agent` header (e.g., `DNFileVaultClient/1.0`). The API intentionally throttles requests from generic user agents like `python-requests`.",
                         "requestBody": {
                             "required": true,
                             "content": {
@@ -139,7 +201,7 @@
                                         "schema": {
                                             "type": "object",
                                             "properties": {
-                                                "token": { "type": "string" },
+                                                "token": { "type": "string", "description": "JWT token. Include as `Authorization: Bearer <token>` in subsequent requests." },
                                                 "user": { "$ref": "#/components/schemas/User" }
                                             }
                                         }
@@ -152,7 +214,9 @@
                 },
                 "/purchases": {
                     "get": {
+                        "tags": ["Purchases"],
                         "summary": "List Purchases",
+                        "description": "Returns all products/purchases owned by the authenticated user.",
                         "security": [{ "bearerAuth": [] }],
                         "responses": {
                             "200": {
@@ -174,7 +238,9 @@
                 },
                 "/purchases/{purchase_id}/files": {
                     "get": {
+                        "tags": ["Purchases"],
                         "summary": "List Purchase Files",
+                        "description": "Returns all files associated with a specific purchase. Each file includes a `cloud_share_link` for direct CDN download.",
                         "security": [{ "bearerAuth": [] }],
                         "parameters": [
                             { "name": "purchase_id", "in": "path", "required": true, "schema": { "type": "integer" } }
@@ -200,7 +266,9 @@
                 },
                 "/groups": {
                     "get": {
+                        "tags": ["Groups"],
                         "summary": "List Groups",
+                        "description": "Returns all membership groups the authenticated user belongs to (e.g., eodLevel2, eodLevel3).",
                         "security": [{ "bearerAuth": [] }],
                         "responses": {
                             "200": {
@@ -222,7 +290,9 @@
                 },
                 "/groups/{group_id}/files": {
                     "get": {
+                        "tags": ["Groups"],
                         "summary": "List Group Files",
+                        "description": "Returns all files within a specific group. Each file includes a `cloud_share_link` for direct CDN download — use this as your primary download method.",
                         "security": [{ "bearerAuth": [] }],
                         "parameters": [
                             { "name": "group_id", "in": "path", "required": true, "schema": { "type": "integer" } }
@@ -243,34 +313,42 @@
                                     }
                                 }
                             },
-                            "403": { "description": "Not a member." },
-                            "410": { "description": "Membership expired." }
+                            "403": { "description": "Not a member of this group." },
+                            "410": { "description": "Group membership has expired." }
                         }
                     }
                 },
                 "/download/{uuid_filename}": {
                     "get": {
-                        "summary": "Download File",
-                        "description": "Returns the file bytes. Use streaming for large downloads.",
+                        "tags": ["Downloads"],
+                        "summary": "Download File (Fallback)",
+                        "description": "**⚠️ Fallback method — use `cloud_share_link` from file listings instead for fastest downloads.**\n\nStreams the file through the API server. Requires JWT authentication. This route is slower than the direct R2 CDN link because it passes through the API server.\n\n**When to use this:**\n- Your corporate firewall blocks `vault.dnfilevault.com`\n- You need server-side audit logging of downloads\n- The `cloud_share_link` is temporarily unavailable\n\n**Recommended pattern:** Always try `cloud_share_link` first, then fall back to this endpoint.",
                         "security": [{ "bearerAuth": [] }],
                         "parameters": [
-                            { "name": "uuid_filename", "in": "path", "required": true, "schema": { "type": "string" } }
+                            { "name": "uuid_filename", "in": "path", "required": true, "schema": { "type": "string" }, "description": "The `uuid_filename` value from the file listing. Do NOT use `display_name` — it will return 404." }
                         ],
                         "responses": {
                             "200": {
-                                "description": "File bytes (ZIP/CSV/etc).",
+                                "description": "File bytes (ZIP/CSV/etc). Use streaming for large downloads.",
                                 "content": {
                                     "application/octet-stream": {
                                         "schema": { "type": "string", "format": "binary" }
                                     }
                                 }
                             },
-                            "403": { "description": "Access denied." },
-                            "404": { "description": "File not found." }
+                            "403": { "description": "Access denied — file is not in your authorized groups or purchases." },
+                            "404": { "description": "File not found. Ensure you are using `uuid_filename`, not `display_name`." }
                         }
                     }
                 }
-            }
+            },
+            "tags": [
+                { "name": "Health & Discovery", "description": "Server health checks and API discovery. Use these endpoints to find and verify available servers before making authenticated requests." },
+                { "name": "Authentication", "description": "Obtain JWT tokens for accessing protected endpoints." },
+                { "name": "Purchases", "description": "List and access files from your one-time and subscription purchases." },
+                { "name": "Groups", "description": "List and access files from your membership groups (e.g., eodLevel2, eodLevel3)." },
+                { "name": "Downloads", "description": "Fallback file download endpoint. Prefer using `cloud_share_link` from file listings for fastest CDN-direct downloads." }
+            ]
         };
 
         Redoc.init(spec, {
@@ -280,7 +358,9 @@
                         main: '#0056b3'
                     }
                 }
-            }
+            },
+            sortPropsAlphabetically: false,
+            hideDownloadButton: false
         }, document.getElementById('redoc-container'));
     </script>
 </body>
