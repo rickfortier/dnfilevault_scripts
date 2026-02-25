@@ -213,7 +213,18 @@ def download_file(session, token, file_info, save_directory, base_url):
     
     # Check if we already have it
     if os.path.exists(full_save_path):
-        return
+        local_size = os.path.getsize(full_save_path)
+        remote_size = file_info.get("file_size")
+        
+        if remote_size is not None and local_size == int(remote_size):
+            # File exists and size matches, skip
+            return
+        
+        if remote_size is None:
+            # If API doesn't provide size, we trust the existing file to avoid infinite loops
+            return
+            
+        print(f"  File {safe_name} has changed (Remote: {remote_size}, Local: {local_size}). Redownloading...")
 
     # Method 1: Try R2 Direct Link (PRIMARY)
     if cloud_url:

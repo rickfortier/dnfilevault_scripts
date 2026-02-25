@@ -180,9 +180,18 @@ def download_file(session, token, file_info, save_directory, base_url):
     safe_name = sanitize_filename(display_name)
     full_save_path = os.path.join(save_directory, safe_name)
     
-    # Skip if already downloaded
+    # Check if we already have it
     if os.path.exists(full_save_path):
-        return
+        local_size = os.path.getsize(full_save_path)
+        remote_size = file_info.get("file_size")
+        
+        if remote_size is not None and local_size == int(remote_size):
+            return
+            
+        if remote_size is None:
+            return
+            
+        log(f"  File {safe_name} has changed (Remote: {remote_size}, Local: {local_size}). Redownloading...")
 
     # Method 1: R2 Direct Link (PRIMARY)
     if cloud_url:

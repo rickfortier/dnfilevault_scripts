@@ -216,8 +216,22 @@ download_file <- function(file_info, save_directory, base_url, token) {
   safe_name     <- sanitize_filename(display_name)
   full_save_path <- file.path(save_directory, safe_name)
   
-  # Skip if already downloaded
-  if (file.exists(full_save_path)) return(invisible(FALSE))
+  # Skip if already downloaded and same size
+  if (file.exists(full_save_path)) {
+    local_size <- file.size(full_save_path)
+    remote_size <- file_info$file_size
+    
+    if (!is.null(remote_size) && !is.na(remote_size) && local_size == as.numeric(remote_size)) {
+      return(invisible(FALSE))
+    }
+    
+    # If remote size is unknown, we stick to existing file
+    if (is.null(remote_size) || is.na(remote_size)) {
+      return(invisible(FALSE))
+    }
+    
+    log_msg("  File ", safe_name, " has changed (Remote: ", remote_size, ", Local: ", local_size, "). Redownloading...")
+  }
   
   temp_path <- paste0(full_save_path, ".tmp")
   
